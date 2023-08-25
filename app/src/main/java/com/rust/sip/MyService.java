@@ -1,6 +1,7 @@
 package com.rust.sip;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Service;
 import android.content.Intent;
 import android.graphics.ImageFormat;
@@ -11,13 +12,16 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.opengl.GLES11Ext;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
 
+import com.rust.sip.GB28181.GB28181CallBack;
 import com.rust.sip.GB28181.gb28181.GB28181Params;
 import com.rust.sip.GB28181.gb28181.XMLUtil;
 import com.rust.sip.GB28181.net.IpAddress;
@@ -35,43 +39,47 @@ import com.rust.sip.GB28181.sip.message.SipMethods;
 import com.rust.sip.GB28181.sip.message.SipResponses;
 import com.rust.sip.GB28181.sip.provider.SipProvider;
 import com.rust.sip.GB28181.sip.provider.SipProviderListener;
+import com.rust.sip.GB28181.tools.NetUtils;
 import com.rust.sip.GB28181.tools.PSmuxer;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
+@TargetApi(Build.VERSION_CODES.HONEYCOMB)
 public class MyService extends Service implements SipProviderListener {
 
     private static final String TAG = "MyService";
     private MyBinder myBinder;
     private SipProvider sipProvider;
     private Timer timerForKeepAlive;
-    private long keepAliveSN=0;
+    private long keepAliveSN = 0;
     private byte[] mPreviewData;
     private MediaCodec mediaCodec;
     public byte[] configByte;
-    private long count=0;
+    private long count = 0;
     private SurfaceTexture surfaceTexture = new SurfaceTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES);
     private Handler handler;
     private int ssrc = 0;
-    private long time=0;
+    private long time = 0;
     private int cseq = 0;
-
-    private int fps = 30;
     private DatagramSocket mediaSocket;
+    private int fps = 15;
+    private GB28181CallBack gb28181CallBack;
 
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
-        myBinder=new MyBinder();
+        myBinder = new MyBinder();
         return myBinder;
     }
 
@@ -87,36 +95,59 @@ public class MyService extends Service implements SipProviderListener {
         sipProvider.stopTrasport();
     }
 
-    public class MyBinder extends Binder{
-        public MyService getService(){
+
+    public class MyBinder extends Binder {
+        public MyService getService() {
             return MyService.this;
         }
     }
 
+    public void setGB28181CallBack(GB28181CallBack gb28181CallBack) {
+        this.gb28181CallBack = gb28181CallBack;
+    }
+
+    boolean isWvp = false;
+
     //region GB28181 部分
     /*国标模块参数初始化*/
-    public void GB28181Init(){
-        GB28181Params.setSIPServerIPAddress("192.168.0.190");//SIP服务器地址
-        GB28181Params.setRemoteSIPServerPort(15060);//SIP服务器端口
-        GB28181Params.setLocalSIPIPAddress("192.168.0.219");//本机地址
-        GB28181Params.setRemoteSIPServerID("34020000002000000001");
-        GB28181Params.setRemoteSIPServerSerial("3402000000");
-        GB28181Params.setLocalSIPPort(15061);//本机端口
-        GB28181Params.setCameraHeigth(720);
-        GB28181Params.setCameraWidth(1280);
-        GB28181Params.setPassword("12345678");//密码
-        GB28181Params.setLocalSIPDeviceId("340200000111000000002");
-        GB28181Params.setLocalSIPMediaId("340200000132000000002");
+    public void GB28181Init() {
+        String ip = NetUtils.getIPAddress(getApplication());
+        Log.d(TAG,"ip== " + ip);
+        GB28181Params.setLocalSIPIPAddress(ip);//本机地址
+        if (!isWvp) {
+            GB28181Params.setSIPServerIPAddress("192.168.8.153");//SIP服务器地址
+            GB28181Params.setRemoteSIPServerID("34020000002000000001");
+            GB28181Params.setRemoteSIPServerSerial("3402000000");
+            GB28181Params.setLocalSIPDeviceId("34020000001320000012");
+            GB28181Params.setLocalSIPMediaId( "34020000001320000012");
+            GB28181Params.setPassword("12345678");//密码
+            GB28181Params.setRemoteSIPServerPort(15060);//SIP服务器端口
+        } else {
+            GB28181Params.setRemoteSIPServerPort(10604);//SIP服务器端口
+            GB28181Params.setSIPServerIPAddress("192.168.1.120");//SIP服务器地址
+            GB28181Params.setRemoteSIPServerID("34020000002000000001");
+            GB28181Params.setRemoteSIPServerSerial("3402000000");
+            GB28181Params.setLocalSIPDeviceId("34020000001320000019");
+            GB28181Params.setLocalSIPMediaId( "34020000001320000019");
+            GB28181Params.setPassword("streamax");//密码
+            //340200000131000000001
+        }
+        GB28181Params.setLocalSIPPort(5060);//本机端口
+        GB28181Params.setCameraHeigth(480);
+        GB28181Params.setCameraWidth(640);
+//        GB28181Params.setCameraHeigth(720);
+//        GB28181Params.setCameraWidth(1080);
+
         GB28181Params.setCurGBState(0);
-        GB28181Params.setCurDeviceDownloadMeidaState(0);
         GB28181Params.setCurDeviceDownloadMeidaState(0);
         GB28181Params.setCurDevicePlayMediaState(0);
         GB28181Params.setCameraState(0);
         Log.d(TAG, "MyService -> GB28181Init()");
     }
+
     /*国标模块参数初始化*/
-    public void GB28181Init(String SIPServerIPAddress,String LocalSIPIPAddress,int RemoteSIPServerPort, int LocalSIPPort,
-                            int CameraHeigth,int CameraWidth,String Password,String LocalSIPDeviceId,String LocalSIPMediaId){
+    public void GB28181Init(String SIPServerIPAddress, String LocalSIPIPAddress, int RemoteSIPServerPort, int LocalSIPPort,
+                            int CameraHeigth, int CameraWidth, String Password, String LocalSIPDeviceId, String LocalSIPMediaId) {
         GB28181Params.setSIPServerIPAddress(SIPServerIPAddress);//SIP服务器地址
         GB28181Params.setLocalSIPIPAddress(LocalSIPIPAddress);
         GB28181Params.setRemoteSIPServerPort(RemoteSIPServerPort);//SIP服务器端口
@@ -132,35 +163,36 @@ public class MyService extends Service implements SipProviderListener {
         GB28181Params.setCurDevicePlayMediaState(0);
         GB28181Params.setCameraState(0);
     }
-    public void GB28181ReStart(){
+
+    public void GB28181ReStart() {
         GB28181_Stop();
         GB28181_Start();
     }
 
-    public void GB28181_Start(){
-        new Thread(()->{
+    public void GB28181_Start() {
+        new Thread(() -> {
             IpAddress.setLocalIpAddress(GB28181Params.getLocalSIPIPAddress());
-            sipProvider=new SipProvider(GB28181Params.getLocalSIPIPAddress(),GB28181Params.getLocalSIPPort());
+            sipProvider = new SipProvider(GB28181Params.getLocalSIPIPAddress(), GB28181Params.getLocalSIPPort());
             sipProvider.addSipProviderListener(this);
-            NameAddress to=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getRemoteSIPServerSerial()));
-            NameAddress from=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getRemoteSIPServerSerial()));
-            NameAddress contact=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-            Message message= MessageFactory.createRequest(sipProvider,SipMethods.REGISTER,new SipURL(GB28181Params.getRemoteSIPServerID(),GB28181Params.getRemoteSIPServerSerial()),to,from,contact,null);
+            NameAddress to = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getRemoteSIPServerSerial()));
+            NameAddress from = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getRemoteSIPServerSerial()));
+            NameAddress contact = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress() + ":" + GB28181Params.getLocalSIPPort()));
+            Message message = MessageFactory.createRequest(sipProvider, SipMethods.REGISTER, new SipURL(GB28181Params.getRemoteSIPServerID(), GB28181Params.getSIPServerIPAddress() + ":" + GB28181Params.getRemoteSIPServerPort()), to, from, contact, null);
             message.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-            sipProvider.sendMessage(message,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+            sipProvider.sendMessage(message, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
         }).start();
     }
 
-    public void GB28181_Stop(){
-        new Thread(()->{
-            if(sipProvider!=null&&GB28181Params.CurGBState==1){
-                NameAddress to=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                NameAddress from=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                NameAddress contact=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                Message message= MessageFactory.createRequest(sipProvider,SipMethods.REGISTER,new SipURL(GB28181Params.getRemoteSIPServerID(),GB28181Params.getRemoteSIPServerSerial()),to,from,contact,null);
+    public void GB28181_Stop() {
+        new Thread(() -> {
+            if (sipProvider != null && GB28181Params.CurGBState == 1) {
+                NameAddress to = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+                NameAddress from = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+                NameAddress contact = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+                Message message = MessageFactory.createRequest(sipProvider, SipMethods.REGISTER, new SipURL(GB28181Params.getRemoteSIPServerID(), GB28181Params.getRemoteSIPServerSerial()), to, from, contact, null);
                 message.setExpiresHeader(new ExpiresHeader(0));
                 message.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                sipProvider.sendMessage(message,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+                sipProvider.sendMessage(message, GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(),0);
                 sipProvider.halt();
                 GB28181Params.setCurDeviceDownloadMeidaState(0);
                 GB28181Params.setCurDeviceDownloadMeidaState(0);
@@ -170,79 +202,80 @@ public class MyService extends Service implements SipProviderListener {
 
     }
 
-    private void GB28181_KeepAlive(){
-        if(sipProvider!=null&&GB28181Params.CurGBState==1){
-            NameAddress to=new NameAddress(new SipURL(GB28181Params.getSIPServerIPAddress(),GB28181Params.getSIPServerIPAddress()));
-            NameAddress from=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-            NameAddress contact=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-            String body="<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+    private void GB28181_KeepAlive() {
+        if (sipProvider != null && GB28181Params.CurGBState == 1) {
+            NameAddress to = new NameAddress(new SipURL(GB28181Params.getSIPServerIPAddress(), GB28181Params.getSIPServerIPAddress()));
+            NameAddress from = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+            NameAddress contact = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+            String body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
                     "    <Notify>\n" +
                     "      <CmdType>Catalog</CmdType>\n" +
-                    "      <SN>"+String.valueOf(keepAliveSN++) +"</SN>\n" +
-                    "      <DeviceID>"+GB28181Params.getLocalSIPDeviceId()+"</DeviceID>\n" +
+                    "      <SN>" + String.valueOf(keepAliveSN++) + "</SN>\n" +
+                    "      <DeviceID>" + GB28181Params.getLocalSIPDeviceId() + "</DeviceID>\n" +
                     "      <Status>OK</Status>\n" +
                     "    </Notify>";
-            Message message=MessageFactory.createMessageRequest(sipProvider,to,from,null,XMLUtil.XML_MANSCDP_TYPE,body);
-            sipProvider.sendMessage(message,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+            Message message = MessageFactory.createMessageRequest(sipProvider, to, from, null, XMLUtil.XML_MANSCDP_TYPE, body);
+            sipProvider.sendMessage(message, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
         }
     }
 
-    public void InitCamera(){
+    public void InitCamera() {
         mPreviewData = new byte[GB28181Params.getCameraWidth() * GB28181Params.getCameraHeigth() * 3 / 2];
-        if(GB28181Params.getmCamera() == null){
+        if (GB28181Params.getmCamera() == null) {
             GB28181Params.setmCamera(android.hardware.Camera.open(Camera.CameraInfo.CAMERA_FACING_BACK));
         }
         GB28181Params.getmCamera().setDisplayOrientation(90);
-        Camera.Parameters parameters=GB28181Params.getmCamera().getParameters();
-        List<int[]> fpsRange = parameters.getSupportedPreviewFpsRange();
+        Camera.Parameters parameters = GB28181Params.getmCamera().getParameters();
         parameters.setPreviewFormat(ImageFormat.NV21);
-        parameters.setPreviewSize(GB28181Params.getCameraWidth(),GB28181Params.getCameraHeigth());
+        parameters.setPreviewSize(GB28181Params.getCameraWidth(), GB28181Params.getCameraHeigth());
         parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
         parameters.setPreviewFpsRange( fps *1000,fps *1000);
 
         GB28181Params.getmCamera().setParameters(parameters);
-        Log.i("camera","CAMERA初始化");
-        try{
-            mediaSocket=new DatagramSocket(0);
-        }catch (SocketException e){
-            e.printStackTrace();
-        }
-
-
-    }
-
-    private void InitMediaCodec(){
+        Log.i("camera", "CAMERA初始化");
         try {
-            mediaCodec=MediaCodec.createEncoderByType("VIDEO/AVC");
-            MediaFormat mediaFormat=MediaFormat.createVideoFormat("VIDEO/AVC",GB28181Params.getCameraWidth(),GB28181Params.getCameraHeigth());
+            mediaSocket = new DatagramSocket(0);
+        } catch (SocketException e) {
+            e.printStackTrace();
+        }
+
+
+    }
+
+    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+    private void InitMediaCodec() {
+        try {
+            mediaCodec = MediaCodec.createEncoderByType("VIDEO/AVC");
+            MediaFormat mediaFormat = MediaFormat.createVideoFormat("VIDEO/AVC", GB28181Params.getCameraWidth(), GB28181Params.getCameraHeigth());
             mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar);
-            mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE,GB28181Params.getCameraWidth()*GB28181Params.getCameraHeigth());
-            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE,fps);
-            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL,5);
-            mediaCodec.configure(mediaFormat,null,null,MediaCodec.CONFIGURE_FLAG_ENCODE);
-            Log.i("MediaCodec","MediaCodec编码器初始化");
-            //mediaCodec.start();
-        }catch (IOException e){
+            mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, GB28181Params.getCameraWidth() * GB28181Params.getCameraHeigth());
+            mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
+            mediaFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
+            mediaCodec.configure(mediaFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            Log.i("MediaCodec", "MediaCodec编码器初始化");
+//            mediaCodec.start();
+        } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    public void SetCameraCallback(){
-        try{
+    public void SetCameraCallback() {
+        try {
             GB28181Params.getmCamera().setPreviewTexture(surfaceTexture);
             GB28181Params.getmCamera().addCallbackBuffer(mPreviewData);
             GB28181Params.getmCamera().setPreviewCallbackWithBuffer(mPreviewCallback);
             GB28181Params.getmCamera().startPreview();
-            Log.i("CAMERA","mCamera.startPreview()");
-        }catch (IOException e){
+            GB28181Params.getmCamera().cancelAutoFocus();// 2如果要实现连续的自动对焦，这一句必须加上
+            Log.i("CAMERA", "mCamera.startPreview()");
+        } catch (IOException e) {
             e.printStackTrace();
         }
 
     }
 
-    public void ReleaseCamera(){
-        if(GB28181Params.getmCamera()!=null&&GB28181Params.getCameraState()<=0){
-            Log.i("ReleaseCamera",""+GB28181Params.getCameraState()+"释放Camera资源");
+    public void ReleaseCamera() {
+        if (GB28181Params.getmCamera() != null && GB28181Params.getCameraState() <= 0) {
+            Log.i("ReleaseCamera", "" + GB28181Params.getCameraState() + "释放Camera资源");
             GB28181Params.getmCamera().stopPreview();
             GB28181Params.getmCamera().setPreviewCallbackWithBuffer(null);
             GB28181Params.getmCamera().release();
@@ -250,15 +283,19 @@ public class MyService extends Service implements SipProviderListener {
         }
     }
 
-    private Camera.PreviewCallback mPreviewCallback=new Camera.PreviewCallback() {
+    private Camera.PreviewCallback mPreviewCallback = new Camera.PreviewCallback() {
+
         @Override
         public void onPreviewFrame(byte[] data, Camera camera) {
-            if(data==null){
+            //TODO 将预览数据 推送到国标平台
+            Log.i("onPreviewFrame", "XXXXX222222222");
+
+            if (data == null) {
                 GB28181Params.getmCamera().addCallbackBuffer(mPreviewData);
-            }else{
-                if(GB28181Params.getCurDevicePlayMediaState()==1){
+            } else {
+                if (GB28181Params.getCurDevicePlayMediaState() == 1) {
                     GB28181Params.getmCamera().addCallbackBuffer(data);
-                    handler.obtainMessage(0,mPreviewData).sendToTarget();
+                    handler.obtainMessage(0, mPreviewData).sendToTarget();
                 }
 
             }
@@ -270,90 +307,90 @@ public class MyService extends Service implements SipProviderListener {
         int framesize = width * height;
         int i = 0, j = 0;
         System.arraycopy(nv21, 0, nv12, 0, framesize);
-        for (i = 0; i < framesize; i++)
-        {
+        for (i = 0; i < framesize; i++) {
             nv12[i] = nv21[i];
         }
-        for (j = 0; j < framesize / 2; j += 2)
-        {
+        for (j = 0; j < framesize / 2; j += 2) {
             nv12[framesize + j - 1] = nv21[j + framesize];
         }
-        for (j = 0; j < framesize / 2; j += 2)
-        {
+        for (j = 0; j < framesize / 2; j += 2) {
             nv12[framesize + j] = nv21[j + framesize - 1];
         }
     }
 
-    private byte[] EncodeH264(byte[] input){
-        try{
-            byte[] yuv420sp=new byte[GB28181Params.getCameraWidth()*GB28181Params.getCameraHeigth() *3/2];
-            NV21ToNV12(input,yuv420sp,GB28181Params.getCameraWidth(),GB28181Params.getCameraHeigth());
-            input=yuv420sp;
-            int inputBufferIndex=mediaCodec.dequeueInputBuffer(-1);
-            ByteBuffer inputBuffer=mediaCodec.getInputBuffer(inputBufferIndex);
-            if(inputBuffer == null){
+    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+    public byte[] EncodeH264(byte[] input) {
+        try {
+            byte[] yuv420sp = new byte[GB28181Params.getCameraWidth() * GB28181Params.getCameraHeigth() * 3 / 2];
+            NV21ToNV12(input, yuv420sp, GB28181Params.getCameraWidth(), GB28181Params.getCameraHeigth());
+            input = yuv420sp;
+            int inputBufferIndex = mediaCodec.dequeueInputBuffer(-1);
+            ByteBuffer inputBuffer = mediaCodec.getInputBuffer(inputBufferIndex);
+            if (inputBuffer == null) {
                 return null;
             }
             inputBuffer.clear();
             inputBuffer.put(input);
 
-            mediaCodec.queueInputBuffer(inputBufferIndex,0,input.length,132+1000000 * count / fps,0);
+            mediaCodec.queueInputBuffer(inputBufferIndex, 0, input.length, 132 + 1000000 * count / fps, 0);
             count++;
-            MediaCodec.BufferInfo bufferInfo=new MediaCodec.BufferInfo();
-            int outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo,0);
-            while(outputBufferIndex >= 0){
+            MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+            int outputBufferIndex = mediaCodec.dequeueOutputBuffer(bufferInfo, 0);
+            while (outputBufferIndex >= 0) {
                 ByteBuffer outputBuffer = mediaCodec.getOutputBuffer(outputBufferIndex);
-                if(outputBuffer == null ){
-                    return  null;
+                if (outputBuffer == null) {
+                    return null;
                 }
                 byte[] outData = new byte[outputBuffer.remaining()];
-                outputBuffer.get(outData,0,outData.length);
-                if(bufferInfo.flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG){
-                    configByte=new byte[bufferInfo.size];
-                    configByte=outData;
+                outputBuffer.get(outData, 0, outData.length);
+                if (bufferInfo.flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) {
+                    configByte = new byte[bufferInfo.size];
+                    configByte = outData;
                 }
-                if(bufferInfo.flags == MediaCodec.BUFFER_FLAG_KEY_FRAME){
-                    byte[] keyframe = new byte[bufferInfo.size+configByte.length];
-                    System.arraycopy(configByte,0,keyframe,0,configByte.length);
-                    System.arraycopy(outData,0,keyframe,configByte.length,outData.length);
-                    mediaCodec.releaseOutputBuffer(outputBufferIndex,false);
+                if (bufferInfo.flags == MediaCodec.BUFFER_FLAG_KEY_FRAME) {
+                    byte[] keyframe = new byte[bufferInfo.size + configByte.length];
+                    System.arraycopy(configByte, 0, keyframe, 0, configByte.length);
+                    System.arraycopy(outData, 0, keyframe, configByte.length, outData.length);
+                    mediaCodec.releaseOutputBuffer(outputBufferIndex, false);
                     return keyframe;
                 }
-                mediaCodec.releaseOutputBuffer(outputBufferIndex,false);
+                mediaCodec.releaseOutputBuffer(outputBufferIndex, false);
                 return outData;
             }
-        }catch (Exception e){
+        } catch (Exception e) {
             e.printStackTrace();
         }
         return null;
     }
 
-    private List<byte[]> SplitByteArray(byte[] input,int size){
+    private List<byte[]> SplitByteArray(byte[] input, int size) {
         List<byte[]> result = new ArrayList<>();
         int length = input.length;
         int count = length / size;
         int r = length % size;
 
-        for(int i = 0;i < count;i++){
-            byte[] newByteArray=new byte[size];
-            System.arraycopy(input,size*i,newByteArray,0,size);
+        for (int i = 0; i < count; i++) {
+            byte[] newByteArray = new byte[size];
+            System.arraycopy(input, size * i, newByteArray, 0, size);
             result.add(newByteArray);
         }
-        if(r != 0){
-            byte[] newByteArray=new byte[r];
-            System.arraycopy(input,length-r,newByteArray,0,r);
+        if (r != 0) {
+            byte[] newByteArray = new byte[r];
+            System.arraycopy(input, length - r, newByteArray, 0, r);
             result.add(newByteArray);
         }
         return result;
     }
-    class SendMediaThread extends Thread{
+
+    class SendMediaThread extends Thread {
         @SuppressLint("HandlerLeak")
         @Override
         public void run() {
             Looper.prepare();
-            handler=new Handler(){
-                public void handleMessage(android.os.Message msg){
+            handler = new Handler() {
+                public void handleMessage(android.os.Message msg) {
                     if (msg.what == 0) {
+                        //TODO 先转成h264，然后推流
                         byte[] raw = EncodeH264(mPreviewData);
                         if (raw != null) {
                             int index = 0;
@@ -375,7 +412,7 @@ public class MyService extends Service implements SipProviderListener {
                                     list.add(naul);
                                 }
                             }
-                            //Log.e(TAG, "handleMessage: " + list.size() + "");
+                            Log.e(TAG, "handleMessage: " + list.size() + "");
                             byte[] psH;
                             if (list.size() == 3) {
                                 psH = PSmuxer.GetPSHeader(0, time, 1);
@@ -384,8 +421,7 @@ public class MyService extends Service implements SipProviderListener {
                             }
                             byte[] Temp = new byte[psH.length + 14 * list.size() + raw.length];
                             byte[] startcode = new byte[]{0x00, 0x00, 0x00, 0x01};
-                            long pts = time;
-
+                            long pts = 132 + 1000000 * cseq / fps;
                             switch (list.size()) {
                                 case 1:
                                     byte[] pesh = PSmuxer.GetPESHeader(list.get(0).length + startcode.length, 0, pts);
@@ -445,7 +481,7 @@ public class MyService extends Service implements SipProviderListener {
                                 }
                                 cseq += 1;
                             }
-                            time += (90000 / fps);
+                            time += 3600;
                         }
                     }
                 }
@@ -464,77 +500,88 @@ public class MyService extends Service implements SipProviderListener {
 
     @Override
     public void onReceivedMessage(SipProvider sip_provider, Message message) {
-        if(message.isResponse()){
-            switch (message.getCSeqHeader().getMethod()){
+        Log.d(TAG, "onReceivedMessage 回复数据:" + message);
+        if (message.isResponse()) {
+            Log.e(TAG, "onReceivedMessage 回复信息:" + message);
+            switch (message.getCSeqHeader().getMethod()) {
                 case SipMethods.REGISTER:
-                    if (message.getStatusLine().getCode()==401){
-                        NameAddress to=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                        NameAddress from=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                        NameAddress contact=new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress()));
-                        Message res=MessageFactory.createRegisterRequest(sipProvider,to,from,contact,null,null);
+                    if (message.getStatusLine().getCode() == 401) {
+                        NameAddress to = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getRemoteSIPServerSerial()));
+                        NameAddress from = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getRemoteSIPServerSerial()));
+                        NameAddress contact = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress() + ":" + GB28181Params.getLocalSIPPort()));
+//                        Message res = MessageFactory.createRegisterRequest(sipProvider, to, from, contact, null, null);
+                        Message res = MessageFactory.createRequest(sipProvider, SipMethods.REGISTER, new SipURL(GB28181Params.getRemoteSIPServerID(), GB28181Params.getSIPServerIPAddress() + ":" + GB28181Params.getRemoteSIPServerPort()), to, from, contact, null);
                         res.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
                         AuthorizationHeader ah = new AuthorizationHeader("Digest");
                         ah.addUsernameParam(GB28181Params.getLocalSIPDeviceId());
                         ah.addRealmParam(message.getWwwAuthenticateHeader().getRealmParam());
                         ah.addNonceParam(message.getWwwAuthenticateHeader().getNonceParam());
                         ah.addUriParam(res.getRequestLine().getAddress().toString());
-                        ah.addQopParam(message.getWwwAuthenticateHeader().getQopParam());
-                        String response = (new DigestAuthentication(SipMethods.REGISTER,
-                                ah, null, GB28181Params.getPassword())).getResponse();
+//                        ah.addQopParam(message.getWwwAuthenticateHeader().getQopParam());
+                        ah.addAlgorithParam("MD5");
+//                        ah.addCnonceParam("611eafd2-3b2e-4453-9d08-f61c2ad1b51c");
+//                        ah.addNcParam("00000001");
+                        String response = (new DigestAuthentication(SipMethods.REGISTER, ah, null, GB28181Params.getPassword())).getResponse();
                         ah.addResponseParam(response);
                         res.setAuthorizationHeader(ah);
-                        if(GB28181Params.getCurGBState()==1){
+                        if (GB28181Params.getCurGBState() == 1) {
                             res.setExpiresHeader(new ExpiresHeader(0));
                         }
-                        sipProvider.sendMessage(res,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
-                    }
-                    else if(message.getStatusLine().getCode()==200){
+                        sipProvider.sendMessage(res, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
+                    } else if (message.getStatusLine().getCode() == 200) {
                         //注销成功
-                        if(GB28181Params.getCurGBState()==1){
+                        if (GB28181Params.getCurGBState() == 1) {
                             GB28181Params.setCurGBState(0);
                             //取消发送心跳包
                             timerForKeepAlive.cancel();
-                        }else {//注册成功
+                        } else {//注册成功
                             GB28181Params.setCurGBState(1);
                             //每隔60秒 发送心跳包
-                            timerForKeepAlive=new Timer(true);
-                            timerForKeepAlive.schedule(keepALiveTask,0,60*1000);
+                            timerForKeepAlive = new Timer(true);
+                            timerForKeepAlive.schedule(keepALiveTask, 0, 30 * 1000);
                         }
                     }
                     break;
                 case SipMethods.MESSAGE:
+                    Log.e(TAG, "onReceivedMessage getBodyType: " + message.getBody());
                     break;
                 case SipMethods.ACK:
                     break;
                 case SipMethods.BYE:
                     break;
             }
-        }
-        else if(message.isRequest()){
-            if(message.isMessage()){
-                if(message.hasBody()){
-                    String body=message.getBody();
-                    String sn=body.substring(body.indexOf("<SN>")+4,body.indexOf("</SN>"));
-                    String cmdType=body.substring(body.indexOf("<CmdType>")+9,body.indexOf("</CmdType>"));
-                    if (message.getBodyType().toLowerCase().equals("application/manscdp+xml")){
-                        //发送 200 OK
-                        if(cmdType.equals("Catalog")){
-                            Message CatalogResponse  =  MessageFactory.createResponse(message,200,SipResponses.reasonOf(200),null);
-                            CatalogResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                            sipProvider.sendMessage(CatalogResponse,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+        } else if (message.isRequest()) {
+            Log.e(TAG, "onReceivedMessage 接受后台信息:" + message);
+            if (message.isMessage()) {
+                if (message.hasBody()) {
+                    String body = message.getBody();
+                    String sn = body.substring(body.indexOf("<SN>") + 4, body.indexOf("</SN>"));
+                    String cmdType = body.substring(body.indexOf("<CmdType>") + 9, body.indexOf("</CmdType>"));
+                    Log.e(TAG, "onReceivedMessage cmdType: " + cmdType);
+                    //查询设备信息
+                    if ("DeviceInfo".equals(cmdType)) {
+                        sendDeviceInfo();
+                    }
 
-                            //region catalogBody
+                    if (message.getBodyType().toLowerCase().equals("application/manscdp+xml")) {
+                        //发送 200 OK
+                        if (cmdType.equals("Catalog")) {
+                            Message CatalogResponse = MessageFactory.createResponse(message, 200, SipResponses.reasonOf(200), null);
+                            CatalogResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
+                            sipProvider.sendMessage(CatalogResponse, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
+
+                            //region catalogBody 通道信息
                             String catalogBody = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
                                     "    <Response>\n" +
                                     "      <CmdType>Catalog</CmdType>\n" +
-                                    "      <SN>"+sn+"</SN>\n" +
-                                    "      <DeviceID>"+GB28181Params.getLocalSIPDeviceId()+"</DeviceID>\n" +
+                                    "      <SN>" + sn + "</SN>\n" +
+                                    "      <DeviceID>" + GB28181Params.getLocalSIPDeviceId() + "</DeviceID>\n" +
                                     "      <SumNum>1</SumNum>\n" +
                                     "      <DeviceList Num='1'>\n" +
                                     "          <Item>\n" +
-                                    "            <DeviceID>"+GB28181Params.getLocalSIPDeviceId()+"</DeviceID>\n" +
-                                    "            <Name>cxj</Name>\n" +
-                                    "            <Manufacturer>ZBGD</Manufacturer>\n" +
+                                    "            <DeviceID>" + GB28181Params.getLocalSIPDeviceId() + "</DeviceID>\n" +
+                                    "            <Name>Cap</Name>\n" +
+                                    "            <Manufacturer>Runde</Manufacturer>\n" +
                                     "            <Model>MODEL</Model>\n" +
                                     "            <Owner>cxj</Owner>\n" +
                                     "            <CivilCode>3400200</CivilCode>\n" +
@@ -543,8 +590,8 @@ public class MyService extends Service implements SipProviderListener {
                                     "            <SafetyWay>0</SafetyWay>\n" +
                                     "            <RegisterWay>1</RegisterWay>\n" +
                                     "            <Secrecy>0</Secrecy>\n" +
-                                    "            <IPAddress>"+GB28181Params.getLocalSIPIPAddress()+"</IPAddress>\n" +
-                                    "            <Port>"+GB28181Params.getLocalSIPPort()+"</Port>\n" +
+                                    "            <IPAddress>" + GB28181Params.getLocalSIPIPAddress() + "</IPAddress>\n" +
+                                    "            <Port>" + GB28181Params.getLocalSIPPort() + "</Port>\n" +
                                     "            <Password>12345678</Password>\n" +
                                     "            <Status>ON</Status>\n" +
                                     "          </Item>\n" +
@@ -552,93 +599,112 @@ public class MyService extends Service implements SipProviderListener {
                                     "    </Response>";
                             //endregion
 
-                            Message CatalogResponseRequest = MessageFactory.createMessageRequest(sipProvider,message.getFromHeader().getNameAddress(),
-                                    message.getToHeader().getNameAddress(),null,XMLUtil.XML_MANSCDP_TYPE,catalogBody) ;
+                            Message CatalogResponseRequest = MessageFactory.createMessageRequest(sipProvider, message.getFromHeader().getNameAddress(),
+                                    message.getToHeader().getNameAddress(), null, XMLUtil.XML_MANSCDP_TYPE, catalogBody);
                             CatalogResponseRequest.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                            sipProvider.sendMessage(CatalogResponseRequest,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
-                        }
-                        else if(cmdType.equals("DeviceControl")){
+                            sipProvider.sendMessage(CatalogResponseRequest, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
+                        } else if (cmdType.equals("DeviceControl")) {
                             //ToDo 解析控制指令
-                            Message DeviceControlResponse=MessageFactory.createResponse(message,200,SipResponses.reasonOf(200),null);
+                            Message DeviceControlResponse = MessageFactory.createResponse(message, 200, SipResponses.reasonOf(200), null);
                             DeviceControlResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                            sipProvider.sendMessage(DeviceControlResponse,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+                            sipProvider.sendMessage(DeviceControlResponse, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
                         }
 
                     }
                 }
-            }
-            else if(message.isInvite()){
-                if(message.hasBody()){
-                    String body=message.getBody();
-                    SessionDescriptor sdp=new SessionDescriptor(body);
-                    MediaDescriptor mediaDescriptor= sdp.getMediaDescriptors().firstElement();
-                    String address= sdp.getConnection().getAddress();
-                    int port=mediaDescriptor.getMedia().getPort();
-                    switch (sdp.getSessionName().getValue().toLowerCase()){
+            } else if (message.isInvite()) {
+                if (message.hasBody()) {
+                    String body = message.getBody();
+                    SessionDescriptor sdp = new SessionDescriptor(body);
+                    MediaDescriptor mediaDescriptor = sdp.getMediaDescriptors().firstElement();
+                    String address = sdp.getConnection().getAddress();
+                    int port = mediaDescriptor.getMedia().getPort();
+                    switch (sdp.getSessionName().getValue().toLowerCase()) {
                         case "play":
-                            String y= body.substring(body.indexOf("y=")+2,body.indexOf("y=")+12);
+                            String y = body.substring(body.indexOf("y=") + 2, body.indexOf("y=") + 12);
+                            Log.e(TAG, "onReceivedMessage   sdp: " + body);
+                            Log.e(TAG, "onReceivedMessage   y: " + y);
+                            if (TextUtils.isEmpty(y) || !TextUtils.isDigitsOnly(y)) {
+                                y = "0" + GB28181Params.getLocalSIPDeviceId().substring(3, 8) + "9546";
+                                Log.e(TAG, "onReceivedMessage  sdp没有y，自己生成: " + y);
 
+                                //海康需要回复一下这个
+                                Message InviteResponse = MessageFactory.createResponse(message, 180, SipResponses.reasonOf(180), new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress())));
+                                InviteResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
+                                sipProvider.sendMessage(InviteResponse, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
+                            }
                             //region InviteResponseBody
-                            String InviteResponseBody="v=0\n" +
-                                    "o="+GB28181Params.getLocalSIPDeviceId()+" 0 0 IN IP4 "+GB28181Params.getLocalSIPIPAddress()+"\n" +
-                                    "s="+sdp.getSessionName().getValue()+"\n" +
-                                    "c=IN IP4 "+GB28181Params.getLocalSIPIPAddress()+"\n" +
+                            String m = body.substring(body.indexOf("m=") + 2);
+                            Log.e(TAG, "onReceivedMessage 是否是TCP推流模式：" + m.contains("TCP/RTP/AVP") + "  m: " + m);
+
+                            String InviteResponseBody = "v=0\n" +
+                                    "o=" + GB28181Params.getLocalSIPDeviceId() + " 0 0 IN IP4 " + GB28181Params.getLocalSIPIPAddress() + "\n" +
+                                    "s=" + sdp.getSessionName().getValue() + "\n" +
+                                    "c=IN IP4 " + GB28181Params.getLocalSIPIPAddress() + "\n" +
                                     "t=0 0\n" +
-                                    "m=video "+port+" RTP/AVP 96\n" +
+                                    "m=video " + port + " TCP/RTP/AVP 96\n" +
                                     "a=sendonly\n" +
                                     "a=rtpmap:96 PS/90000\n" +
-                                    "y="+y+"";
+                                    "a=connection:new\n" +
+                                    "a=streamnumber:0\n" +
+                                    "a=sendonly\n" +
+                                    "a=setup:active\n" +
+                                    "y=" + y + "";
                             //endregion
-
+                            GB28181Params.setMediaServerProtol(m.contains("TCP/RTP/AVP") ? 1 : 0);
                             GB28181Params.setMediaServerIPAddress(address);
                             GB28181Params.setMediaServerPort(port);
-                            ssrc=Integer.parseInt(y);
-                            Log.i("sdp",":收到INVATE,ADDRESS="+ GB28181Params.getMediaServerIPAddress()+";port="+GB28181Params.getMediaServerPort()+"；ssrc="+ssrc+"");
-                            Message InviteResponse=MessageFactory.createResponse(message,200,SipResponses.reasonOf(200),SipProvider.pickTag(),
-                                    new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(),GB28181Params.getLocalSIPIPAddress())),"Application/Sdp",InviteResponseBody);
+                            ssrc = Integer.parseInt(y);
+                            GB28181Params.setSsrc(ssrc);
+                            Log.e(TAG, ":收到INVATE,ADDRESS=" + GB28181Params.getMediaServerIPAddress() + ";port=" + GB28181Params.getMediaServerPort() + "；ssrc=" + ssrc + "");
+                            Message InviteResponse = MessageFactory.createResponse(message, 200, SipResponses.reasonOf(200), SipProvider.pickTag(),
+                                    new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress())), "Application/Sdp", InviteResponseBody);
                             InviteResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                            sipProvider.sendMessage(InviteResponse,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+                            sipProvider.sendMessage(InviteResponse, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
                             break;
                         case "palyback":
+
                             break;
                         case "download":
                             break;
                     }
                 }
-            }
-            else if(message.isAck()){
-                if(GB28181Params.getCurDevicePlayMediaState()==0){
-                    SendMediaThread thread =new SendMediaThread();
-                    thread.start();
-                    //初始化Camera、编码器
-                    InitMediaCodec();
-
-                    InitCamera();
-                    //启动编码器
-                    mediaCodec.start();
-                    Log.i("Mediacodec","mediaCodec.start()");
-                    //Camera 回调、启动Camera预览
-                    SetCameraCallback();
+            } else if (message.isAck()) {
+                if (GB28181Params.getCurDevicePlayMediaState() == 0) {
+//                    SendMediaThread thread = new SendMediaThread();
+//                    thread.start();
+//                    //初始化Camera、编码器
+//                    InitMediaCodec();
+////
+//                    InitCamera();
+////                    //启动编码器
+//                    mediaCodec.start();
+//                    Log.i("Mediacodec", "mediaCodec.start()");
+//                    //Camera 回调、启动Camera预览
+////                    //TODO 方式1
+//                    SetCameraCallback();
+                    //TODO 方式2 ，不转换成h264
+                    gb28181CallBack.onStartRtp(GB28181Params.getSsrc(), GB28181Params.getMediaServerIPAddress(),
+                            GB28181Params.getMediaServerPort(), GB28181Params.getMediaServerProtol());
 
                     GB28181Params.setCurDevicePlayMediaState(1);
                     GB28181Params.setCameraState(GB28181Params.getCameraState() + 1);
                 }
-            }
-            else if(message.isBye()){
-                if(GB28181Params.CurDevicePlayMediaState==1){
+            } else if (message.isBye()) {
+                if (GB28181Params.CurDevicePlayMediaState == 1) {
                     //200 OK
-                    Message ByeResponse  =  MessageFactory.createResponse(message,200,SipResponses.reasonOf(200),null);
+                    Message ByeResponse = MessageFactory.createResponse(message, 200, SipResponses.reasonOf(200), null);
                     ByeResponse.setUserAgentHeader(new UserAgentHeader(GB28181Params.defaultUserAgent));
-                    sipProvider.sendMessage(ByeResponse,GB28181Params.defaultProtol,GB28181Params.getSIPServerIPAddress(),GB28181Params.getRemoteSIPServerPort(),0);
+                    sipProvider.sendMessage(ByeResponse, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
 
-                    GB28181Params.setCurDevicePlayMediaState(1);
-                    if(GB28181Params.getCameraState()>0){
+                    GB28181Params.setCurDevicePlayMediaState(0);
+                    if (GB28181Params.getCameraState() > 0) {
                         GB28181Params.setCameraState(GB28181Params.getCameraState() - 1);
                     }
 
                     //释放Camera资源
-                    ReleaseCamera();
-
+//                    ReleaseCamera();
+                    gb28181CallBack.onStopRtp(GB28181Params.getSsrc());
                 }
             }
         }
@@ -647,5 +713,29 @@ public class MyService extends Service implements SipProviderListener {
     }
 //endregion
 
+    /**
+     * 设备信息
+     */
+    private void sendDeviceInfo() {
+        if (sipProvider != null && GB28181Params.CurGBState == 1) {
+            NameAddress to = new NameAddress(new SipURL(GB28181Params.getSIPServerIPAddress(), GB28181Params.getSIPServerIPAddress()));
+            NameAddress from = new NameAddress(new SipURL(GB28181Params.getLocalSIPDeviceId(), GB28181Params.getLocalSIPIPAddress()));
+            String body = "<?xml version=\"1.0\" encoding=\"GB2312\"?>\n" +
+                    "    <Response>\n" +
+                    "      <CmdType>DeviceInfo</CmdType>\n" +
+                    "      <SN>" + keepAliveSN++ + "</SN>\n" +
+                    "      <DeviceID>" + GB28181Params.getLocalSIPDeviceId() + "</DeviceID>\n" +
+                    "      <Status>OK</Status>\n" +
+                    "      <DeviceName>gb28181-client</DeviceName>\n" +
+                    "      <Manufacturer>Runde-cap</Manufacturer>\n" +
+                    "      <Model>TC-2808AN-HD</Model>\n" +
+                    "      <Firmware>V2.1,build091111</Firmware>\n" +
+                    "      <Channel>1</Channel>\n" +
+                    "    </Response>";
+            Message message = MessageFactory.createMessageRequest(sipProvider, to, from, null, XMLUtil.XML_MANSCDP_TYPE, body);
+            Log.i("KeepAlive", "上报设备信息：" + message);
+            sipProvider.sendMessage(message, GB28181Params.defaultProtol, GB28181Params.getSIPServerIPAddress(), GB28181Params.getRemoteSIPServerPort(), 0);
+        }
+    }
 }
 

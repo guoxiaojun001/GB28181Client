@@ -1011,10 +1011,9 @@ public class SipProvider implements Configurable, TransportListener,
 				return;
 			}
 			//if (!Sipdroid.release)
-				printLog("received new SIP message "+msg.getRequestLine()+" "+msg.getStatusLine(), LogLevel.HIGH); // modified
-			printLog("message:\r\n" + msg.toString(), LogLevel.LOWER);
-
-			Logger.d("\n\n<<<<<<<<<<<<<<<<<<<<<<<<<\nSipProvider: Received new SIP message: \n\n"+msg.toString()+"\n");
+//			printLog("received new SIP message "+msg.getRequestLine()+" "+msg.getStatusLine(), LogLevel.HIGH); // modified
+//			printLog("message:\r\n" + msg.toString(), LogLevel.LOWER);
+			Logger.d("收到的信息: \n\n"+msg+"\n");
 
 			// if a request, handle "received" and "rport" parameters
 			if (msg.isRequest()) {

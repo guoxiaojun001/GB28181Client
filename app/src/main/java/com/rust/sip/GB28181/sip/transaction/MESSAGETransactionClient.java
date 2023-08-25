@@ -1,6 +1,7 @@
 package com.rust.sip.GB28181.sip.transaction;
 
 import android.text.TextUtils;
+import android.util.Log;
 
 import com.rust.sip.GB28181.gb28181.DeviceItem;
 import com.rust.sip.GB28181.gb28181.DeviceList;
@@ -45,7 +46,7 @@ public class MESSAGETransactionClient extends Transaction {
     }
 
     public void onReceivedMessage(SipProvider provider, Message msg) {
-//        android.util.Log.d("aaaa", "aaaaa" + msg);
+        Log.e("aaaa", "onReceivedMessage2222:" + msg);
 //        if (msg.isRequest()) {
 //            String req_method = msg.getRequestLine().getMethod();
 //            if (req_method.equals(SipMethods.MESSAGE)) {

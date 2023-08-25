@@ -1,3 +1,10 @@
 <resources>
     <string name="app_name">GB28181Client</string>
+
+    <string name="gb_server_port">服务器端口:</string>
+    <string name="gb_server_ip">服务器地址:</string>
+    <string name="gb_server_id">服务器编号:</string>
+    <string name="gb_user_id">用户ID:</string>
+    <string name="gb_local_ip">本机地址:</string>
+    <string name="gb_user_password">用户密码：</string>
 </resources>
